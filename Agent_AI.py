@@ -874,7 +874,7 @@ if not st.session_state["display_history"]:
             "- 🔍 Anomalie i spadki\n"
             "- 🏆 Rankingi i porównania sklepów\n"
             "- 💡 Interpretację i zalecenia\n\n"
-            "Spróbuj: *„Które sklepy mają największy spadek sesji w tym tygodniu?"*"
+            """Spróbuj: *„Które sklepy mają największy spadek sesji w tym tygodniu?”*"""
         )
 
 # Wyświetl historię
