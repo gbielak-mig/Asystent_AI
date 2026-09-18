@@ -71,10 +71,18 @@ def get_ga4_admin_client() -> AnalyticsAdminServiceClient:
     return AnalyticsAdminServiceClient(credentials=creds)
 
 
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
 @st.cache_resource
 def get_ai_client():
-    import anthropic
-    return anthropic.Anthropic(api_key=st.secrets["anthropic"]["api_key"])
+    from groq import Groq
+    return Groq(api_key=st.secrets["groq"]["api_key"])
+
+
+def get_ai_model() -> str:
+    """Model Groq używany przez agenta czatu; nadpisywalny przez [groq].model w secrets."""
+    return st.secrets.get("groq", {}).get("model", DEFAULT_GROQ_MODEL)
 
 
 # ─────────────────────────────────────────────────────────────

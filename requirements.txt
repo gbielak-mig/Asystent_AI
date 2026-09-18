@@ -2,7 +2,7 @@ streamlit>=1.32.0
 pandas>=2.2.0
 plotly>=5.20.0
 requests
-anthropic>=0.25.0
+groq
 
 google-auth>=2.28.0
 google-auth-oauthlib>=1.2.0

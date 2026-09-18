@@ -7,12 +7,13 @@ Wymagania (requirements.txt):
     streamlit
     pandas
     google-analytics-data
+    google-analytics-admin
     google-auth
-    anthropic>=0.25.0
+    groq
     plotly
     requests
 
-secrets.toml (taki sam jak w eksporterze + anthropic):
+secrets.toml:
     [app]
     password = "..."
 
@@ -22,8 +23,9 @@ secrets.toml (taki sam jak w eksporterze + anthropic):
     [ga4_properties]
     # MPK = ["ga4_id", "Brand", "Currency"]
 
-    [anthropic]
-    api_key = "sk-ant-..."
+    [groq]
+    api_key = "gsk_..."
+    # model = "llama-3.3-70b-versatile"   # opcjonalnie, nadpisuje domyślny model
 """
 
 import json
@@ -43,6 +45,7 @@ from ga4_core import (
     _resolve_stores,
     detect_anomalies_for_stores,
     get_ai_client,
+    get_ai_model,
     get_ga4_client,
     property_map,
     require_auth,
@@ -530,6 +533,20 @@ def dispatch_tool(name: str, inputs: dict) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+# Groq (OpenAI-compatible) format narzędzi: {"type": "function", "function": {...}}
+GROQ_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["input_schema"],
+        },
+    }
+    for t in TOOLS
+]
+
+
 # ─────────────────────────────────────────────────────────────
 # SYSTEM PROMPT
 # ─────────────────────────────────────────────────────────────
@@ -574,10 +591,10 @@ SYSTEM_PROMPT = f"""Jesteś GA4 AI Agentem — ekspertem analityki e-commerce an
 # ─────────────────────────────────────────────────────────────
 # AGENTIC LOOP
 # ─────────────────────────────────────────────────────────────
-def run_agent(user_message: str, history: list[dict]) -> tuple[str, list]:
+def run_agent(user_message: str, history: list[dict]) -> tuple[str, list, list]:
     """
-    Uruchamia agenta z tool calling.
-    Zwraca (final_text, updated_history).
+    Uruchamia agenta z tool calling (Groq, format OpenAI-compatible).
+    Zwraca (final_text, updated_history, tool_calls_log).
     """
     global _PENDING_CHARTS
     _PENDING_CHARTS = []
@@ -587,40 +604,43 @@ def run_agent(user_message: str, history: list[dict]) -> tuple[str, list]:
     tool_calls_log = []  # do wyświetlenia w UI
 
     for _ in range(10):  # max 10 iteracji tool calling
-        response = ai.messages.create(
-            model="claude-sonnet-4-20250514",
+        response = ai.chat.completions.create(
+            model=get_ai_model(),
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
+            tools=GROQ_TOOLS,
+            tool_choice="auto",
         )
+        msg = response.choices[0].message
 
-        # Dodaj odpowiedź asystenta do historii
-        messages.append({"role": "assistant", "content": response.content})
+        if msg.tool_calls:
+            messages.append({
+                "role": "assistant",
+                "content": msg.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
 
-        if response.stop_reason == "end_turn":
-            # Wyodrębnij tekst końcowej odpowiedzi
-            final_text = " ".join(
-                block.text for block in response.content if hasattr(block, "text")
-            )
-            return final_text, messages, tool_calls_log
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    tool_calls_log.append(f"🔧 `{block.name}` — {json.dumps(block.input, ensure_ascii=False)[:120]}")
-                    result_str = dispatch_tool(block.name, block.input)
-                    tool_results.append({
-                        "type":        "tool_result",
-                        "tool_use_id": block.id,
-                        "content":     result_str,
-                    })
-
-            messages.append({"role": "user", "content": tool_results})
+            for tc in msg.tool_calls:
+                inputs = json.loads(tc.function.arguments)
+                tool_calls_log.append(f"🔧 `{tc.function.name}` — {json.dumps(inputs, ensure_ascii=False)[:120]}")
+                result_str = dispatch_tool(tc.function.name, inputs)
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.id,
+                    "content":      result_str,
+                })
             continue
 
-        break  # nieoczekiwany stop_reason
+        # Brak wywołań narzędzi — to finalna odpowiedź
+        messages.append({"role": "assistant", "content": msg.content})
+        return msg.content or "", messages, tool_calls_log
 
     return "Przepraszam, coś poszło nie tak w pętli agenta.", messages, tool_calls_log
 
