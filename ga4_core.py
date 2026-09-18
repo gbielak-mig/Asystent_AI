@@ -161,26 +161,47 @@ def _fetch_aggregate(property_id: int, metrics: list[str],
         return {"error": str(e)}
 
 
+def _run_report_rows(property_id: int, dimensions: list[str], metrics: list[str],
+                      start: date, end: date, page_size: int = 10_000) -> list[dict]:
+    """Uruchamia RunReportRequest z paginacją (offset/limit) i zwraca WSZYSTKIE
+    wiersze jako listę dictów {nazwa_wymiaru_lub_metryki: wartość tekstowa}.
+    Bez paginacji GA4 Data API domyślnie ucina wynik do jednej strony — przy
+    wielu wierszach (np. wysokiej kardynalności custom dimension) to dawało
+    fałszywe 'brak danych', bo prawdziwe wartości mogły być na kolejnej stronie."""
+    all_rows = []
+    offset = 0
+    while True:
+        req = RunReportRequest(
+            property=f"properties/{property_id}",
+            dimensions=[Dimension(name=d) for d in dimensions],
+            metrics=[Metric(name=m) for m in metrics],
+            date_ranges=[DateRange(start_date=str(start), end_date=str(end))],
+            limit=page_size,
+            offset=offset,
+        )
+        resp = get_ga4_client().run_report(req)
+        for row in resp.rows:
+            r = {dimensions[i]: dv.value for i, dv in enumerate(row.dimension_values)}
+            for i, mv in enumerate(row.metric_values):
+                r[metrics[i]] = mv.value
+            all_rows.append(r)
+        offset += page_size
+        if offset >= resp.row_count:
+            break
+    return all_rows
+
+
 def _fetch_daily(property_id: int, metrics: list[str],
                  start: date, end: date,
                  dimensions_extra: list[str] | None = None) -> pd.DataFrame:
     dims = ["date"] + (dimensions_extra or [])
     try:
-        req = RunReportRequest(
-            property=f"properties/{property_id}",
-            dimensions=[Dimension(name=d) for d in dims],
-            metrics=[Metric(name=m) for m in metrics],
-            date_ranges=[DateRange(start_date=str(start), end_date=str(end))],
-        )
-        resp = get_ga4_client().run_report(req)
-        rows = []
-        for row in resp.rows:
-            r = {dims[i]: dv.value for i, dv in enumerate(row.dimension_values)}
-            for i, mv in enumerate(row.metric_values):
-                r[metrics[i]] = float(mv.value)
-            rows.append(r)
+        rows = _run_report_rows(property_id, dims, metrics, start, end)
         if not rows:
             return pd.DataFrame()
+        for r in rows:
+            for m in metrics:
+                r[m] = float(r[m])
         df = pd.DataFrame(rows)
         df["date"] = pd.to_datetime(df["date"], format="%Y%m%d").dt.date
         return df.sort_values("date").reset_index(drop=True)
@@ -192,17 +213,8 @@ def fetch_event_counts(property_id: int, start: date, end: date) -> dict:
     """Zwraca {event_name: liczba_zdarzeń} dla property w okresie,
     albo {"__error__": komunikat} gdy zapytanie się nie powiodło."""
     try:
-        req = RunReportRequest(
-            property=f"properties/{property_id}",
-            dimensions=[Dimension(name="eventName")],
-            metrics=[Metric(name="eventCount")],
-            date_ranges=[DateRange(start_date=str(start), end_date=str(end))],
-        )
-        resp = get_ga4_client().run_report(req)
-        return {
-            row.dimension_values[0].value: int(float(row.metric_values[0].value))
-            for row in resp.rows
-        }
+        rows = _run_report_rows(property_id, ["eventName"], ["eventCount"], start, end)
+        return {r["eventName"]: int(float(r["eventCount"])) for r in rows}
     except Exception as e:
         return {"__error__": str(e)}
 
@@ -212,19 +224,14 @@ def fetch_custom_dimension_activity(property_id: int, parameter_name: str,
     """Zwraca liczbę zdarzeń z niepustą wartością danego custom dimension
     w okresie, albo None gdy zapytanie się nie powiodło."""
     prefix = "customUser" if scope == "USER" else "customEvent"
+    dim_name = f"{prefix}:{parameter_name}"
     try:
-        req = RunReportRequest(
-            property=f"properties/{property_id}",
-            dimensions=[Dimension(name=f"{prefix}:{parameter_name}")],
-            metrics=[Metric(name="eventCount")],
-            date_ranges=[DateRange(start_date=str(start), end_date=str(end))],
-        )
-        resp = get_ga4_client().run_report(req)
+        rows = _run_report_rows(property_id, [dim_name], ["eventCount"], start, end)
         total = 0
-        for row in resp.rows:
-            val = row.dimension_values[0].value
+        for r in rows:
+            val = r[dim_name]
             if val and val != "(not set)":
-                total += int(float(row.metric_values[0].value))
+                total += int(float(r["eventCount"]))
         return total
     except Exception:
         return None
