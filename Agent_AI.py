@@ -143,6 +143,10 @@ TOOLS = [
         "description": (
             "Pobiera dzienne dane GA4 dla wybranego sklepu/sklepów i metryki — "
             "do analizy trendu, wykrywania anomalii, sezonowości. "
+            "Zwraca gotowo policzone statystyki (peak_date, week_over_week_pct, mean) — "
+            "UŻYWAJ TYCH LICZB zamiast samodzielnie liczyć maksima/trendy z surowych danych. "
+            "Gdy chart=true (domyślnie) i podana jedna metryka, automatycznie generuje też "
+            "wykres — nie wywołuj osobno żadnego narzędzia do rysowania. "
             "Użyj gdy pytanie dotyczy trendu, historii, wykresu, zmian w czasie."
         ),
         "input_schema": {
@@ -165,6 +169,15 @@ TOOLS = [
                 },
                 "start_date": {"type": "string", "description": "Data od."},
                 "end_date":   {"type": "string", "description": "Data do."},
+                "chart": {
+                    "type": "boolean",
+                    "description": "Czy dołączyć wykres (działa tylko dla 1 metryki). Domyślnie true.",
+                },
+                "chart_type": {
+                    "type": "string",
+                    "enum": ["line", "bar", "area"],
+                    "description": "Typ wykresu. Domyślnie line.",
+                },
             },
             "required": ["metrics", "start_date", "end_date"],
         },
@@ -203,40 +216,6 @@ TOOLS = [
                 },
             },
             "required": ["metrics"],
-        },
-    },
-    {
-        "name": "plot_trend",
-        "description": (
-            "Rysuje wykres liniowy trendu dla podanych danych. "
-            "Użyj PO pobraniu danych przez get_trend, przekazując te same parametry. "
-            "Wykres pojawi się bezpośrednio w czacie."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "mpks": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "brands": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "metric": {
-                    "type": "string",
-                    "enum": MONITORED_METRICS,
-                    "description": "Jedna metryka do wykresu.",
-                },
-                "start_date": {"type": "string"},
-                "end_date":   {"type": "string"},
-                "chart_type": {
-                    "type": "string",
-                    "enum": ["line", "bar", "area"],
-                    "description": "Typ wykresu. Domyślnie line.",
-                },
-            },
-            "required": ["metric", "start_date", "end_date"],
         },
     },
     {
@@ -335,6 +314,8 @@ def tool_get_trend(
     end_date: str,
     mpks: list[str] | None = None,
     brands: list[str] | None = None,
+    chart: bool = True,
+    chart_type: str = "line",
 ) -> dict:
     stores = _resolve_stores(mpks, brands)
     if stores.empty:
@@ -355,77 +336,75 @@ def tool_get_trend(
         return {"error": "Brak danych dla podanego okresu."}
 
     combined = pd.concat(all_dfs, ignore_index=True)
-    # Zwróć skrócone dane (max 200 wierszy) żeby nie zapychać kontekstu
-    sample = combined.head(200)
-    return {
+
+    # Statystyki policzone po stronie kodu (nie przez model) — peak, ostatnia
+    # wartość, zmiana tydzień-do-tygodnia. Małe modele czatowe często się mylą
+    # przy ręcznym czytaniu maksimów/trendów z surowej tabeli.
+    summary = {}
+    for m in metrics:
+        per_store = {}
+        for mpk, g in combined.groupby("MPK"):
+            vals = g[["date", m]].dropna().sort_values("date")
+            if vals.empty:
+                continue
+            peak_row = vals.loc[vals[m].idxmax()]
+            latest_row = vals.iloc[-1]
+            wow_pct = None
+            prev_week = vals[vals["date"] <= (e - timedelta(days=7))]
+            if not prev_week.empty:
+                prev_val = prev_week.iloc[-1][m]
+                if prev_val:
+                    wow_pct = round((latest_row[m] - prev_val) / prev_val * 100, 1)
+            per_store[mpk] = {
+                "mean":               round(vals[m].mean(), 2),
+                "peak_date":          str(peak_row["date"]),
+                "peak_value":         round(peak_row[m], 2),
+                "latest_date":        str(latest_row["date"]),
+                "latest_value":       round(latest_row[m], 2),
+                "week_over_week_pct": wow_pct,
+            }
+        summary[m] = per_store
+
+    result = {
         "period": {"start": str(s), "end": str(e)},
         "rows": len(combined),
-        "data": sample.to_dict(orient="records"),
-        "columns": list(sample.columns),
+        "summary": summary,
+        # Zwróć skrócone dane (max 200 wierszy) żeby nie zapychać kontekstu
+        "data": combined.head(200).to_dict(orient="records"),
+        "columns": list(combined.columns),
     }
 
+    if chart and len(metrics) == 1:
+        result["chart"] = _queue_trend_chart(combined, metrics[0], s, e, chart_type)
 
-def tool_detect_anomalies(
-    metrics: list[str],
-    mpks: list[str] | None = None,
-    brands: list[str] | None = None,
-    reference_date: str = "yesterday",
-    sigma_threshold: float = 2.0,
-) -> dict:
-    stores = _resolve_stores(mpks, brands)
-    if stores.empty:
-        return {"error": "Nie znaleziono sklepów."}
-    return detect_anomalies_for_stores(stores, metrics, reference_date, sigma_threshold)
+    return result
 
 
 # Przechowujemy wykresy do renderowania
 _PENDING_CHARTS: list = []
 
-def tool_plot_trend(
-    metric: str,
-    start_date: str,
-    end_date: str,
-    mpks: list[str] | None = None,
-    brands: list[str] | None = None,
-    chart_type: str = "line",
-) -> dict:
-    stores = _resolve_stores(mpks, brands)
-    if stores.empty:
-        return {"error": "Nie znaleziono sklepów."}
-
-    s = _parse_date(start_date)
-    e = _parse_date(end_date)
-    all_dfs = []
-
-    for _, row in stores.iterrows():
-        df = _fetch_daily(row["ID_GA4"], [metric], s, e)
-        if not df.empty and "error" not in df.columns:
-            df["Sklep"] = f"{row['MPK']} – {row['Brand']}"
-            all_dfs.append(df)
-
-    if not all_dfs:
-        return {"error": "Brak danych dla wykresu."}
-
-    combined = pd.concat(all_dfs, ignore_index=True)
-    combined["date"] = combined["date"].astype(str)
+def _queue_trend_chart(combined: pd.DataFrame, metric: str, s, e, chart_type: str) -> str:
+    plot_df = combined.copy()
+    plot_df["date"] = plot_df["date"].astype(str)
+    plot_df["Sklep"] = plot_df["MPK"] + " – " + plot_df["Brand"]
 
     title = f"{METRIC_LABELS.get(metric, metric)} | {s} → {e}"
 
     if chart_type == "bar":
         fig = px.bar(
-            combined, x="date", y=metric, color="Sklep",
+            plot_df, x="date", y=metric, color="Sklep",
             title=title, barmode="group",
             color_discrete_sequence=px.colors.qualitative.Set2,
         )
     elif chart_type == "area":
         fig = px.area(
-            combined, x="date", y=metric, color="Sklep",
+            plot_df, x="date", y=metric, color="Sklep",
             title=title,
             color_discrete_sequence=px.colors.qualitative.Set2,
         )
     else:
         fig = px.line(
-            combined, x="date", y=metric, color="Sklep",
+            plot_df, x="date", y=metric, color="Sklep",
             title=title, markers=True,
             color_discrete_sequence=px.colors.qualitative.Set2,
         )
@@ -441,7 +420,20 @@ def tool_plot_trend(
     )
 
     _PENDING_CHARTS.append(fig)
-    return {"status": "Wykres wygenerowany i zostanie wyświetlony w czacie.", "rows": len(combined)}
+    return "Wykres wygenerowany i zostanie wyświetlony w czacie."
+
+
+def tool_detect_anomalies(
+    metrics: list[str],
+    mpks: list[str] | None = None,
+    brands: list[str] | None = None,
+    reference_date: str = "yesterday",
+    sigma_threshold: float = 2.0,
+) -> dict:
+    stores = _resolve_stores(mpks, brands)
+    if stores.empty:
+        return {"error": "Nie znaleziono sklepów."}
+    return detect_anomalies_for_stores(stores, metrics, reference_date, sigma_threshold)
 
 
 def tool_compare_stores(
@@ -521,8 +513,6 @@ def dispatch_tool(name: str, inputs: dict) -> str:
             result = tool_get_trend(**inputs)
         elif name == "detect_anomalies":
             result = tool_detect_anomalies(**inputs)
-        elif name == "plot_trend":
-            result = tool_plot_trend(**inputs)
         elif name == "compare_stores":
             result = tool_compare_stores(**inputs)
         else:
@@ -574,12 +564,17 @@ SYSTEM_PROMPT = f"""Jesteś GA4 AI Agentem — ekspertem analityki e-commerce an
 
 ## Zasady działania
 1. ZAWSZE używaj narzędzi do pobierania danych — nigdy nie zmyślaj liczb
-2. Gdy użytkownik pyta o wykres, NAJPIERW wywołaj plot_trend lub compare_stores
-3. Przy porównaniach zawsze dodaj kontekst (czy to dobry/zły wynik i dlaczego)
-4. Jeśli pytanie jest niejasne — zapytaj o MPK lub zakres dat
-5. Odpowiadaj po polsku, zwięźle i rzeczowo
-6. Dla anomalii zawsze sugeruj możliwe przyczyny i kroki naprawcze
-7. Dzisiejsze dane mogą być niekompletne — informuj o tym gdy użytkownik pyta o "dziś"
+2. Gdy użytkownik pyta o trend/wykres, wywołaj get_trend (domyślnie sam dołącza wykres)
+   albo compare_stores przy porównaniach — NIE wywołuj do tego samego pytania dodatkowych
+   narzędzi, to niepotrzebnie wydłuża odpowiedź
+3. get_trend zwraca gotowo policzone pole "summary" (peak_date, peak_value, latest_value,
+   week_over_week_pct, mean) per sklep i metryka — ZAWSZE cytuj te liczby, NIE licz
+   samodzielnie maksimów/zmian % z surowych wierszy w polu "data" (łatwo się pomylić)
+4. Przy porównaniach zawsze dodaj kontekst (czy to dobry/zły wynik i dlaczego)
+5. Jeśli pytanie jest niejasne — zapytaj o MPK lub zakres dat
+6. Odpowiadaj po polsku, zwięźle i rzeczowo
+7. Dla anomalii zawsze sugeruj możliwe przyczyny i kroki naprawcze
+8. Dzisiejsze dane mogą być niekompletne — informuj o tym gdy użytkownik pyta o "dziś"
 
 ## Format odpowiedzi
 - Używaj emoji sparingowo dla czytelności
