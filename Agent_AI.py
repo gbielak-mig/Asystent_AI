@@ -369,13 +369,18 @@ def tool_get_trend(
         "period": {"start": str(s), "end": str(e)},
         "rows": len(combined),
         "summary": summary,
-        # Zwróć skrócone dane (max 200 wierszy) żeby nie zapychać kontekstu
-        "data": combined.head(200).to_dict(orient="records"),
         "columns": list(combined.columns),
     }
 
     if chart and len(metrics) == 1:
         result["chart"] = _queue_trend_chart(combined, metrics[0], s, e, chart_type)
+        # Wykres + "summary" wystarczą do odpowiedzi — surowe wiersze pominięte,
+        # żeby nie zapychać kontekstu i nie zjadać limitu tokenów/minutę (miały
+        # one udział w realnym 429 na darmowym tierze Groq).
+        result["data"] = "pominięte — użyj pól 'summary' i informacji o wykresie"
+    else:
+        # Bez wykresu: skrócone dane (max 60 wierszy), żeby nie zapychać kontekstu
+        result["data"] = combined.head(60).to_dict(orient="records")
 
     return result
 
