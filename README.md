@@ -37,7 +37,7 @@ W `secrets.toml` sekcja `[anthropic]` została zastąpiona przez:
 ```toml
 [groq]
 api_key = "gsk_..."
-# model = "llama-3.3-70b-versatile"   # opcjonalnie, nadpisuje domyślny model
+# model = "openai/gpt-oss-20b"   # opcjonalnie, nadpisuje domyślny model
 ```
 
 Klucz zakładasz za darmo na [console.groq.com](https://console.groq.com). Pełny format `secrets.toml`

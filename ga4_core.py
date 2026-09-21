@@ -71,7 +71,7 @@ def get_ga4_admin_client() -> AnalyticsAdminServiceClient:
     return AnalyticsAdminServiceClient(credentials=creds)
 
 
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 
 
 @st.cache_resource
