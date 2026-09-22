@@ -97,9 +97,11 @@ TOOLS = [
     {
         "name": "get_metrics",
         "description": (
-            "Pobiera zagregowane metryki GA4 dla wybranych sklepów i okresu czasu. "
-            "Zwraca wartości bieżące oraz (opcjonalnie) porównanie do poprzedniego okresu. "
-            "Użyj gdy pytanie dotyczy konkretnych liczb, wyników, przychodów itp."
+            "Pobiera zagregowane metryki GA4 (sumy za cały okres) dla wybranych sklepów. "
+            "Zwraca wartości bieżące oraz (opcjonalnie) porównanie sumy do poprzedniego "
+            "okresu tej samej długości. Użyj gdy pytanie dotyczy sumy/wyniku okresu i "
+            "'czy było lepiej/gorzej niż wcześniej' — BEZ potrzeby rozbicia dzień po dniu "
+            "ani wykresu. Nie łącz z get_trend w jednej odpowiedzi."
         ),
         "input_schema": {
             "type": "object",
@@ -143,11 +145,13 @@ TOOLS = [
         "description": (
             "Pobiera dzienne dane GA4 dla wybranego sklepu/sklepów i metryki — "
             "do analizy trendu, wykrywania anomalii, sezonowości. "
-            "Zwraca gotowo policzone statystyki (peak_date, week_over_week_pct, mean) — "
-            "UŻYWAJ TYCH LICZB zamiast samodzielnie liczyć maksima/trendy z surowych danych. "
-            "Gdy chart=true (domyślnie) i podana jedna metryka, automatycznie generuje też "
-            "wykres — nie wywołuj osobno żadnego narzędzia do rysowania. "
-            "Użyj gdy pytanie dotyczy trendu, historii, wykresu, zmian w czasie."
+            "Zwraca gotowo policzone statystyki (peak_date, week_over_week_pct — ostatni "
+            "dzień vs ten sam dzień tydzień wcześniej, mean) — UŻYWAJ TYCH LICZB zamiast "
+            "samodzielnie liczyć maksima/trendy z surowych danych. Gdy chart=true "
+            "(domyślnie) i podana jedna metryka, automatycznie generuje też wykres — nie "
+            "wywołuj osobno żadnego narzędzia do rysowania. Użyj gdy pytanie dotyczy "
+            "trendu, historii, wykresu, zmian w czasie. Nie łącz z get_metrics w jednej "
+            "odpowiedzi — week_over_week_pct w summary już daje porównanie."
         ),
         "input_schema": {
             "type": "object",
@@ -569,12 +573,19 @@ SYSTEM_PROMPT = f"""Jesteś GA4 AI Agentem — ekspertem analityki e-commerce an
 
 ## Zasady działania
 1. ZAWSZE używaj narzędzi do pobierania danych — nigdy nie zmyślaj liczb
-2. Gdy użytkownik pyta o trend/wykres, wywołaj get_trend (domyślnie sam dołącza wykres)
-   albo compare_stores przy porównaniach — NIE wywołuj do tego samego pytania dodatkowych
-   narzędzi, to niepotrzebnie wydłuża odpowiedź
-3. get_trend zwraca gotowo policzone pole "summary" (peak_date, peak_value, latest_value,
-   week_over_week_pct, mean) per sklep i metryka — ZAWSZE cytuj te liczby, NIE licz
-   samodzielnie maksimów/zmian % z surowych wierszy w polu "data" (łatwo się pomylić)
+2. DLA JEDNEGO PYTANIA UŻYTKOWNIKA WYWOŁAJ DOKŁADNIE JEDNO narzędzie pobierające dane
+   (chyba że naprawdę potrzebujesz dwóch różnych rzeczy, np. dane + osobno ranking
+   sklepów). Każde dodatkowe wywołanie to osobna runda do modelu — kosztuje limit i czas.
+   Wybór narzędzia:
+   - Pytanie o sumę/wynik okresu i "czy było lepiej/gorzej niż wcześniej" (bez potrzeby
+     dnia po dniu) → get_metrics z compare_previous=true. NIE dodawaj do tego get_trend.
+   - Pytanie o trend/wykres/sezonowość/szczyt/spadek w konkretnym dniu → get_trend
+     (domyślnie sam dołącza wykres i policzone porównanie dnia do dnia sprzed tygodnia
+     w polu "summary" — to wystarcza, NIE dodawaj do tego get_metrics)
+   - Porównanie sklepów między sobą → compare_stores
+3. get_trend/get_metrics zwracają gotowo policzone liczby (np. "summary", "change") —
+   ZAWSZE cytuj te liczby, NIE licz samodzielnie maksimów/zmian % z surowych danych
+   (łatwo się pomylić)
 4. Przy porównaniach zawsze dodaj kontekst (czy to dobry/zły wynik i dlaczego)
 5. Jeśli pytanie jest niejasne — zapytaj o MPK lub zakres dat
 6. Odpowiadaj po polsku, zwięźle i rzeczowo
