@@ -23,11 +23,18 @@ from google.oauth2 import service_account
 
 MONITORED_METRICS = ["sessions", "totalRevenue", "conversions", "bounceRate"]
 METRIC_LABELS = {
-    "sessions":     "Sesje",
-    "totalRevenue": "Przychód",
-    "conversions":  "Konwersje",
-    "bounceRate":   "Wsp. odbić",
+    "sessions":              "Sesje",
+    "totalRevenue":          "Przychód",
+    "conversions":           "Konwersje",
+    "bounceRate":            "Wsp. odbić",
+    "sessionConversionRate": "CR (sesje)",
+    "addToCarts":            "Dodania do koszyka",
+    "ecommercePurchases":    "Zakupy",
 }
+
+# Metryki dla strony Przegląd (pages/0_Przeglad.py) — NIE dodane do MONITORED_METRICS,
+# żeby nie rozdymać schematów narzędzi czatu (Agent_AI.py) i nie zjadać tokenów Groq.
+OVERVIEW_METRICS = ["sessions", "totalRevenue", "conversions", "bounceRate", "sessionConversionRate"]
 
 yesterday = date.today() - timedelta(days=1)
 
@@ -346,3 +353,93 @@ def detect_anomalies_for_stores(
         "anomalies":       anomalies,
         "all_stores":      summaries,
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# TRENDY PER SKLEP (strona Przegląd)
+# ─────────────────────────────────────────────────────────────
+def compute_trend_summary(stores: pd.DataFrame, metric: str,
+                           start: date, end: date) -> dict:
+    """Dla każdego sklepu w `stores`: dzienne dane dla `metric` w okresie start-end
+    oraz policzone mean/peak/ostatnia wartość/zmiana tydzień-do-tygodnia.
+    Zwraca {MPK: {"brand", "df", "mean", "peak_date", "peak_value",
+                  "latest_date", "latest_value", "week_over_week_pct"}}."""
+    result = {}
+    for _, row in stores.iterrows():
+        df = _fetch_daily(row["ID_GA4"], [metric], start, end)
+        if df.empty or metric not in df.columns:
+            continue
+        vals = df[["date", metric]].dropna().sort_values("date")
+        if vals.empty:
+            continue
+
+        peak_row   = vals.loc[vals[metric].idxmax()]
+        latest_row = vals.iloc[-1]
+
+        wow_pct = None
+        prev_week = vals[vals["date"] <= (end - timedelta(days=7))]
+        if not prev_week.empty:
+            prev_val = prev_week.iloc[-1][metric]
+            if prev_val:
+                wow_pct = round((latest_row[metric] - prev_val) / prev_val * 100, 1)
+
+        result[row["MPK"]] = {
+            "brand":               row["Brand"],
+            "df":                  df,
+            "mean":                round(vals[metric].mean(), 2),
+            "peak_date":           str(peak_row["date"]),
+            "peak_value":          round(peak_row[metric], 2),
+            "latest_date":         str(latest_row["date"]),
+            "latest_value":        round(latest_row[metric], 2),
+            "week_over_week_pct":  wow_pct,
+        }
+    return result
+
+
+# ─────────────────────────────────────────────────────────────
+# PORZUCONE KOSZYKI (strona Przegląd)
+# ─────────────────────────────────────────────────────────────
+def detect_cart_abandonment_anomalies(
+    stores: pd.DataFrame,
+    reference_date: str = "yesterday",
+    sigma_threshold: float = 2.0,
+) -> list[dict]:
+    """Wykrywa anomalie we wskaźniku porzuconych koszyków
+    (1 - ecommercePurchases / addToCarts) względem 30-dniowej historii."""
+    ref = _parse_date(reference_date)
+    hist_end = ref - timedelta(days=1)
+    hist_start = hist_end - timedelta(days=29)
+
+    findings = []
+    for _, row in stores.iterrows():
+        df = _fetch_daily(row["ID_GA4"], ["addToCarts", "ecommercePurchases"], hist_start, ref)
+        if df.empty or "addToCarts" not in df.columns:
+            continue
+
+        df = df[df["addToCarts"] > 0].copy()
+        if df.empty:
+            continue
+        df["abandonment_rate"] = 1 - (df["ecommercePurchases"] / df["addToCarts"]).clip(upper=1)
+
+        hist  = df[df["date"] <= hist_end]
+        today = df[df["date"] == ref]
+        if hist.empty or today.empty or len(hist) < 2:
+            continue
+
+        hist_mean = hist["abandonment_rate"].mean()
+        hist_std  = hist["abandonment_rate"].std()
+        today_val = today.iloc[0]["abandonment_rate"]
+
+        if hist_std and hist_std > 0:
+            sigma_diff = (today_val - hist_mean) / hist_std
+            if abs(sigma_diff) > sigma_threshold:
+                findings.append({
+                    "MPK":        row["MPK"],
+                    "Brand":      row["Brand"],
+                    "metric":     "cart_abandonment_rate",
+                    "current":    round(today_val * 100, 1),
+                    "hist_mean":  round(hist_mean * 100, 1),
+                    "sigma_diff": round(sigma_diff, 2),
+                    "direction":  "powyżej" if sigma_diff > 0 else "poniżej",
+                })
+    return findings
