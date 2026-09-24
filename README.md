@@ -4,7 +4,8 @@ Aplikacja Streamlit z agentem AI do Google Analytics 4.
 
 ## Strony
 
-- **pages/0_Przeglad.py** – strona startowa, BEZ udziału LLM/Groq (liczona bezpośrednio w kodzie, więc nie zależy od limitów Groq):
+- **Przeglad.py** (plik główny/entrypoint) – strona startowa, BEZ udziału LLM/Groq (liczona
+  bezpośrednio w kodzie, więc nie zależy od limitów Groq):
   - **Trendy** – który rynek rośnie/spada (wybrana metryka, próg % zmiany tydz./tydz.), wykres per sklep do rozwinięcia,
   - **Nowe analizy** – automatycznie wykryte anomalie (przychód, ruch, konwersje, CR, wsp. odbić, porzucone koszyki) względem 30-dniowej historii.
 - **pages/1_Audyt.py** – samodzielny audyt całego portfolio sklepów naraz:
@@ -12,7 +13,7 @@ Aplikacja Streamlit z agentem AI do Google Analytics 4.
   - czy skonfigurowane parametry/eventy faktycznie zbierają dane („martwe” tagi),
   - anomalie statystyczne w metrykach (odchylenia od 30-dniowej średniej) dla wszystkich sklepów naraz,
   - spójność wdrożenia eventów między sklepami tego samego brandu.
-- **Agent_AI.py** – czat z agentem (Groq + tool calling): metryki, trendy, wykresy, ranking sklepów, anomalie na żądanie. Darmowy tier Groq ma niski limit tokenów/minutę (potrafi wywalić się na dłuższych pytaniach) — strona zostaje funkcjonalna, ale priorytetem rozwoju są Przegląd i Audyt, które nie zależą od Groq.
+- **pages/2_Agent_AI.py** – czat z agentem (Groq + tool calling): metryki, trendy, wykresy, ranking sklepów, anomalie na żądanie. Darmowy tier Groq ma niski limit tokenów/minutę (potrafi wywalić się na dłuższych pytaniach) — strona zostaje funkcjonalna, ale priorytetem rozwoju są Przegląd i Audyt, które nie zależą od Groq.
 
 Wspólny kod (klienci GA4/Groq, mapowanie sklepów, pobieranie danych) jest w `ga4_core.py`.
 
@@ -20,10 +21,15 @@ Wspólny kod (klienci GA4/Groq, mapowanie sklepów, pobieranie danych) jest w `g
 
 ```
 pip install -r requirements.txt
-streamlit run Agent_AI.py
+streamlit run Przeglad.py
 ```
 
-W sidebarze Streamlit strony pojawiają się w kolejności: "0 Przegląd" (startowa), "1 Audyt".
+**Jeśli appka jest już wdrożona na Streamlit Cloud** ze starym plikiem głównym
+(`Agent_AI.py`), trzeba raz zmienić to w konfiguracji: App → Settings → General →
+**Main file path** → `Przeglad.py`, potem appka sama zrobi redeploy.
+
+W sidebarze Streamlit strony pojawiają się w kolejności: Przegląd (startowa, plik główny),
+"1 Audyt", "2 Agent AI".
 
 ## Wymagania konfiguracyjne
 
@@ -48,4 +54,4 @@ api_key = "gsk_..."
 ```
 
 Klucz zakładasz za darmo na [console.groq.com](https://console.groq.com). Pełny format `secrets.toml`
-patrz nagłówek `Agent_AI.py`.
+patrz nagłówek `pages/2_Agent_AI.py`.

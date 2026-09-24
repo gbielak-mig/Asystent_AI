@@ -2,8 +2,8 @@
 GA4 Core
 ========
 Wspólne klienci, mapowanie sklepów i funkcje pobierania danych z GA4,
-używane zarówno przez czat agenta (Agent_AI.py) jak i stronę audytu
-(pages/1_Audyt.py).
+używane przez stronę Przegląd (Przeglad.py), audyt (pages/1_Audyt.py)
+i czat agenta (pages/2_Agent_AI.py).
 """
 
 from datetime import date, timedelta
@@ -26,14 +26,15 @@ METRIC_LABELS = {
     "sessions":              "Sesje",
     "totalRevenue":          "Przychód",
     "conversions":           "Konwersje",
-    "bounceRate":            "Wsp. odbić",
+    "bounceRate":            "Wsp. odbić (bounce rate)",
     "sessionConversionRate": "CR (sesje)",
     "addToCarts":            "Dodania do koszyka",
     "ecommercePurchases":    "Zakupy",
 }
 
-# Metryki dla strony Przegląd (pages/0_Przeglad.py) — NIE dodane do MONITORED_METRICS,
-# żeby nie rozdymać schematów narzędzi czatu (Agent_AI.py) i nie zjadać tokenów Groq.
+# Metryki dla strony Przegląd (Przeglad.py) — NIE dodane do MONITORED_METRICS,
+# żeby nie rozdymać schematów narzędzi czatu (pages/2_Agent_AI.py) i nie zjadać
+# tokenów Groq.
 OVERVIEW_METRICS = ["sessions", "totalRevenue", "conversions", "bounceRate", "sessionConversionRate"]
 
 yesterday = date.today() - timedelta(days=1)
