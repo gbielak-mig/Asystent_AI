@@ -28,6 +28,17 @@ st.caption(
     "w kodzie, bez udziału czatu/Groq."
 )
 
+# Opisy metryk pokazywane jako podpowiedź przy wyborze (żeby "Wsp. odbić" nie
+# było zagadką) — te same skróty co w Agent_AI/Audycie, ale tu z wyjaśnieniem.
+METRIC_HELP = {
+    "sessions":              "Liczba sesji (wizyt) w sklepie.",
+    "totalRevenue":          "Przychód w walucie sklepu.",
+    "conversions":           "Liczba konwersji (zdarzeń kluczowych, np. zakupów).",
+    "bounceRate":            "Współczynnik odbić — % sesji, w których użytkownik "
+                              "wszedł i wyszedł bez żadnej interakcji. Wyższy = gorzej.",
+    "sessionConversionRate": "CR — % sesji zakończonych konwersją (zakupem).",
+}
+
 # ─────────────────────────────────────────────────────────────
 # USTAWIENIA
 # ─────────────────────────────────────────────────────────────
@@ -38,17 +49,37 @@ with st.sidebar:
         "Metryka do sekcji Trendy", core.OVERVIEW_METRICS,
         format_func=lambda m: core.METRIC_LABELS.get(m, m),
     )
-    move_threshold = st.slider(
-        "Próg 'rosnący/spadający' (% zmiany tydz./tydz.)", 1, 30, 5,
-    )
-    sigma_threshold = st.slider(
-        "Próg anomalii (σ) w sekcji Nowe analizy", 1.0, 4.0, 2.0, step=0.5,
-    )
+    if METRIC_HELP.get(trend_metric):
+        st.caption(f"ℹ️ {METRIC_HELP[trend_metric]}")
+
+    with st.expander("Zaawansowane progi"):
+        st.caption(
+            "Domyślne wartości są sensownym punktem startowym — zmieniaj, jeśli "
+            "widzisz za dużo szumu (podnieś próg) albo za mało sygnałów (obniż)."
+        )
+        move_threshold = st.slider(
+            "Próg 'rosnący/spadający' (% zmiany tydz./tydz.)", 1, 30, 10,
+            help="Poniżej tego progu sklep liczy się jako 'stabilny'.",
+        )
+        sigma_threshold = st.slider(
+            "Próg anomalii (σ) w sekcji Nowe analizy", 1.0, 4.0, 2.0, step=0.5,
+            help="2.0σ ≈ standardowy próg istotności statystycznej. Podnieś do "
+                 "2.5-3.0, jeśli dostajesz za dużo alertów.",
+        )
+
     brand_options = sorted(core.property_map["Brand"].unique())
     brand_filter = st.multiselect(
         "Ogranicz do brandów (opcjonalnie)", brand_options,
         help="Puste = wszystkie sklepy.",
     )
+    mpk_pool = core.property_map
+    if brand_filter:
+        mpk_pool = mpk_pool[mpk_pool["Brand"].isin(brand_filter)]
+    mpk_filter = st.multiselect(
+        "Ogranicz do MPK (opcjonalnie)", sorted(mpk_pool["MPK"].unique()),
+        help="Puste = wszystkie sklepy z wybranych brandów.",
+    )
+
     run_clicked = st.button("🔄 Odśwież przegląd", type="primary", use_container_width=True)
     st.caption(f"Sklepów w portfolio: **{len(core.property_map)}**")
 
@@ -85,6 +116,8 @@ if run_clicked:
     stores_to_check = core.property_map
     if brand_filter:
         stores_to_check = stores_to_check[stores_to_check["Brand"].isin(brand_filter)]
+    if mpk_filter:
+        stores_to_check = stores_to_check[stores_to_check["MPK"].isin(mpk_filter)]
     if stores_to_check.empty:
         st.error("Brak sklepów dla wybranych filtrów.")
     else:
