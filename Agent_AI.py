@@ -8,7 +8,14 @@ w kodzie sekcje:
     CR, wsp. odbić, porzucone koszyki) względem 30-dniowej historii.
 
 Nic tu nie zależy od limitów Groq — więc działa zawsze, niezależnie od stanu
-czatu na stronie głównej.
+czatu (pages/2_Czat.py).
+
+UWAGA: ten plik nazywa się Agent_AI.py (nie Przeglad.py), mimo że to strona
+Przeglądu, a nie czat. Streamlit Cloud nie pozwala zmienić "Main file path"
+po wdrożeniu appki bez usunięcia i założenia jej od nowa (utrata URL-a,
+trzeba by od nowa wklejać sekrety) — więc zamiast tego to WŁAŚNIE ten plik,
+pod tą nazwą, musi zostać głównym punktem wejścia. Rzeczywisty czat jest
+w pages/2_Czat.py.
 """
 
 from datetime import timedelta

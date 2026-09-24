@@ -2,8 +2,8 @@
 GA4 Core
 ========
 Wspólne klienci, mapowanie sklepów i funkcje pobierania danych z GA4,
-używane przez stronę Przegląd (Przeglad.py), audyt (pages/1_Audyt.py)
-i czat agenta (pages/2_Agent_AI.py).
+używane przez stronę Przegląd (Agent_AI.py — patrz UWAGA w jego nagłówku
+o nazwie pliku), audyt (pages/1_Audyt.py) i czat agenta (pages/2_Czat.py).
 """
 
 from datetime import date, timedelta
@@ -33,8 +33,8 @@ METRIC_LABELS = {
     "itemRevenue":           "Przychód z produktu",
 }
 
-# Metryki dla strony Przegląd (Przeglad.py) — NIE dodane do MONITORED_METRICS,
-# żeby nie rozdymać schematów narzędzi czatu (pages/2_Agent_AI.py) i nie zjadać
+# Metryki dla strony Przegląd (Agent_AI.py) — NIE dodane do MONITORED_METRICS,
+# żeby nie rozdymać schematów narzędzi czatu (pages/2_Czat.py) i nie zjadać
 # tokenów Groq.
 OVERVIEW_METRICS = ["sessions", "totalRevenue", "conversions", "bounceRate", "sessionConversionRate"]
 
