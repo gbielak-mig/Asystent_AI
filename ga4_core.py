@@ -30,6 +30,7 @@ METRIC_LABELS = {
     "sessionConversionRate": "CR (sesje)",
     "addToCarts":            "Dodania do koszyka",
     "ecommercePurchases":    "Zakupy",
+    "itemRevenue":           "Przychód z produktu",
 }
 
 # Metryki dla strony Przegląd (Przeglad.py) — NIE dodane do MONITORED_METRICS,
@@ -444,3 +445,61 @@ def detect_cart_abandonment_anomalies(
                     "direction":  "powyżej" if sigma_diff > 0 else "poniżej",
                 })
     return findings
+
+
+# ─────────────────────────────────────────────────────────────
+# ANOMALIE PER WYMIAR — produkty, kampanie (strona Przegląd)
+# ─────────────────────────────────────────────────────────────
+def detect_dimension_anomalies(
+    stores: pd.DataFrame,
+    metric: str,
+    dimension: str,
+    reference_date: str = "yesterday",
+    sigma_threshold: float = 2.0,
+    min_history_points: int = 5,
+    max_results: int = 15,
+) -> list[dict]:
+    """Wykrywa anomalie `metric` rozbitego po `dimension` (np. itemName,
+    sessionCampaignName) — każda WARTOŚĆ wymiaru (każdy produkt/kampania)
+    ma policzoną własną 30-dniową historię i sprawdzana jest osobno.
+    Zwraca listę znalezisk (max `max_results`) posortowaną malejąco po |σ|,
+    każde z dzienną serią danych do wykresu (klucz "df")."""
+    ref = _parse_date(reference_date)
+    hist_end = ref - timedelta(days=1)
+    hist_start = hist_end - timedelta(days=29)
+
+    findings = []
+    for _, row in stores.iterrows():
+        df = _fetch_daily(row["ID_GA4"], [metric], hist_start, ref, dimensions_extra=[dimension])
+        if df.empty or dimension not in df.columns or metric not in df.columns:
+            continue
+        df = df[df[dimension].notna() & (df[dimension] != "(not set)") & (df[dimension] != "")]
+
+        for value, g in df.groupby(dimension):
+            g = g.sort_values("date")
+            hist = g[g["date"] <= hist_end][metric].dropna()
+            today_rows = g[g["date"] == ref]
+            if len(hist) < min_history_points or today_rows.empty:
+                continue
+
+            hist_mean = hist.mean()
+            hist_std  = hist.std()
+            today_val = today_rows.iloc[0][metric]
+            if not hist_std or hist_std <= 0:
+                continue
+
+            sigma_diff = (today_val - hist_mean) / hist_std
+            if abs(sigma_diff) > sigma_threshold:
+                findings.append({
+                    "MPK":        row["MPK"],
+                    "Brand":      row["Brand"],
+                    "value":      value,
+                    "current":    round(today_val, 2),
+                    "hist_mean":  round(hist_mean, 2),
+                    "sigma_diff": round(sigma_diff, 2),
+                    "direction":  "powyżej" if sigma_diff > 0 else "poniżej",
+                    "df":         g[["date", metric]].reset_index(drop=True),
+                })
+
+    findings.sort(key=lambda x: abs(x["sigma_diff"]), reverse=True)
+    return findings[:max_results]
