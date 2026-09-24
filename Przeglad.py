@@ -80,6 +80,16 @@ with st.sidebar:
         help="Puste = wszystkie sklepy z wybranych brandów.",
     )
 
+    include_dim_insights = st.checkbox(
+        "Dołącz produkty i kampanie, które się wybijają",
+        value=False,
+        help=(
+            "Sprawdza każdy produkt i każdą kampanię osobno względem ich własnej "
+            "30-dniowej historii — dużo więcej zapytań do GA4, wyraźnie wolniejsze. "
+            "Warto zawęzić do konkretnego brandu/MPK powyżej przed włączeniem."
+        ),
+    )
+
     run_clicked = st.button("🔄 Odśwież przegląd", type="primary", use_container_width=True)
     st.caption(f"Sklepów w portfolio: **{len(core.property_map)}**")
 
@@ -87,8 +97,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────
 # LICZENIE
 # ─────────────────────────────────────────────────────────────
-def run_overview(stores: pd.DataFrame, lookback_days: int,
-                  trend_metric: str, sigma_threshold: float) -> dict:
+def run_overview(stores: pd.DataFrame, lookback_days: int, trend_metric: str,
+                  sigma_threshold: float, include_dim_insights: bool) -> dict:
     end = core.yesterday
     start = end - timedelta(days=lookback_days - 1)
 
@@ -100,12 +110,24 @@ def run_overview(stores: pd.DataFrame, lookback_days: int,
         stores, sigma_threshold=sigma_threshold
     )
 
+    product_insights = campaign_insights = []
+    if include_dim_insights:
+        product_insights = core.detect_dimension_anomalies(
+            stores, "itemRevenue", "itemName", sigma_threshold=sigma_threshold
+        )
+        campaign_insights = core.detect_dimension_anomalies(
+            stores, "sessionConversionRate", "sessionCampaignName", sigma_threshold=sigma_threshold
+        )
+
     return {
-        "period":         {"start": str(start), "end": str(end)},
-        "trend":          trend,
-        "trend_metric":   trend_metric,
-        "anomalies":      anomalies,
-        "cart_anomalies": cart_anomalies,
+        "period":                {"start": str(start), "end": str(end)},
+        "trend":                 trend,
+        "trend_metric":          trend_metric,
+        "anomalies":             anomalies,
+        "cart_anomalies":        cart_anomalies,
+        "include_dim_insights":  include_dim_insights,
+        "product_insights":      product_insights,
+        "campaign_insights":     campaign_insights,
     }
 
 
@@ -121,9 +143,15 @@ if run_clicked:
     if stores_to_check.empty:
         st.error("Brak sklepów dla wybranych filtrów.")
     else:
-        with st.spinner("Liczę trendy i szukam anomalii…"):
+        spinner_text = (
+            "Liczę trendy, szukam anomalii i sprawdzam produkty/kampanie… "
+            "to może chwilę potrwać" if include_dim_insights else
+            "Liczę trendy i szukam anomalii…"
+        )
+        with st.spinner(spinner_text):
             st.session_state["overview_result"] = run_overview(
-                stores_to_check, lookback_days, trend_metric, sigma_threshold
+                stores_to_check, lookback_days, trend_metric,
+                sigma_threshold, include_dim_insights,
             )
 
 result = st.session_state["overview_result"]
@@ -232,3 +260,48 @@ else:
             f"{metric_name} = {ins['current']} "
             f"(średnia z historii {ins['hist_mean']}, {ins['sigma_diff']}σ {ins['direction']})"
         )
+
+# ─────────────────────────────────────────────────────────────
+# SEKCJA: PRODUKTY I KAMPANIE, KTÓRE SIĘ WYBIJAJĄ
+# ─────────────────────────────────────────────────────────────
+if result.get("include_dim_insights"):
+    st.header("🏷️ Produkty i kampanie, które się wybijają")
+
+    def render_dimension_insights(findings: list, metric: str, noun: str) -> None:
+        """Renderuje listę znalezisk detect_dimension_anomalies jako rozwijane
+        wpisy z wykresem trendu danej wartości wymiaru (produktu/kampanii)."""
+        if not findings:
+            st.info(f"Brak {noun}, które odstają od własnej historii w wybranym okresie.")
+            return
+        label = core.METRIC_LABELS.get(metric, metric)
+        for f in findings:
+            arrow = "🔺" if f["direction"] == "powyżej" else "🔻"
+            with st.expander(
+                f"{arrow} {f['value']} — {f['MPK']} ({f['Brand']}) · "
+                f"{label} = {f['current']} (średnia {f['hist_mean']}, {f['sigma_diff']}σ)"
+            ):
+                df = f["df"].copy()
+                df["date"] = df["date"].astype(str)
+                fig = px.line(
+                    df, x="date", y=metric, markers=True,
+                    title=f"{label} — {f['value']} ({f['MPK']})",
+                    color_discrete_sequence=["#e67e22"],
+                )
+                fig.update_layout(
+                    plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font_color="#fafafa",
+                    xaxis=dict(showgrid=True, gridcolor="#2a2a3e"),
+                    yaxis=dict(showgrid=True, gridcolor="#2a2a3e"),
+                    margin=dict(l=40, r=20, t=50, b=40),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    tab_products, tab_campaigns = st.tabs(["📦 Produkty", "📣 Kampanie"])
+    with tab_products:
+        render_dimension_insights(result["product_insights"], "itemRevenue", "produktów")
+    with tab_campaigns:
+        render_dimension_insights(result["campaign_insights"], "sessionConversionRate", "kampanii")
+else:
+    st.caption(
+        "🏷️ Produkty i kampanie, które się wybijają — zaznacz to w panelu bocznym "
+        "i kliknij Odśwież, żeby zobaczyć tę sekcję (wyłączone domyślnie, bo jest wolniejsze)."
+    )
